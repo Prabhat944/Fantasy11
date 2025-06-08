@@ -1,0 +1,22 @@
+{
+    "name": "payment-service",
+    "version": "1.0.0",
+    "description": "Handles payment processing and gateway interactions.",
+    "main": "src/server.js",
+    "scripts": {
+      "start": "node src/server.js",
+      "dev": "nodemon src/server.js"
+    },
+    "dependencies": {
+      "express": "^5.1.0",
+      "mongoose": "^8.14.3",
+      "axios": "^1.9.0",
+      "dotenv": "^16.5.0",
+      "cors": "^2.8.5",
+      "morgan": "^1.10.0",
+      "uuid": "^9.0.1"
+    },
+    "devDependencies": {
+      "nodemon": "^3.1.10"
+    }
+  }
