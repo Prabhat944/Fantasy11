@@ -1,6 +1,6 @@
  // In team-service: (e.g., services/userServiceClient.js or a helper in your controller)
 const axios = require('axios');
-const USER_SERVICE_BASE_URL = process.env.USER_SERVICE_BASE_URL || 'http://localhost:3001'; // Example User Service URL
+const USER_SERVICE_BASE_URL = process.env.USER_SERVICE_BASE_URL || 'http://localhost:5003'; // Example User Service URL
 
 /**
  * Checks if a user exists by calling the User Service.

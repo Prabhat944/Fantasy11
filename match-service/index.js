@@ -21,7 +21,7 @@ app.use(morgan('dev'));
 app.use(express.json());
 
 // Routes
-app.use('/matches', matchRoutes); // Forwarded by Gateway as /api/v1/matches
+app.use('/api/v1/cricket', matchRoutes); // Forwarded by Gateway as /api/v1/matches
 app.use('/api/matches', contestThirdPartyApiCallRoutes);
 // Health route
 app.get('/', (req, res) => res.send('Match Service is running...'));

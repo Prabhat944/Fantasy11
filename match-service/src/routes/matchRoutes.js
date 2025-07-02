@@ -9,7 +9,9 @@ router.get('/cricket/match/:matchId', controller.getMatchDetails);
 router.get('/cricket/recent-matches', controller.getRecentMatches);
 console.log('Cricket routes loaded');
 router.get('/my-matches', authMiddleware, controller.getMyMatches);
-router.get('/match/squad', authMiddleware, controller.getMatchSquad);
-
-
+router.get(
+    '/matches/my-contests/:matchId', 
+    authMiddleware, 
+    controller.getUserContestsForMatch
+);
 module.exports = router;

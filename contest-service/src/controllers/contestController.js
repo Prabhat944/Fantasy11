@@ -1,14 +1,11 @@
-// controllers/contestController.js
-
 const ContestParticipation = require('../models/ContestParticipation');
 const Contest = require('../models/Contest');
+const Team = require('../models/TeamSchema');
 const { cloneContest } = require('../utils/cloneContest');
-const entityDataService = require('../utils/thirdPartyApiCall');
-const { getMatchById, getTeamDetails, getUserMatch, createUserMatch } = entityDataService;
+const Match = require('../models/UpcomingMatches')
 
 exports.joinContest = async (req, res) => {
   const userId = req.user._id;
-  console.log('check the userid', userId);
   const { matchId, contestId, teamId } = req.body;
 
   if (!matchId || !contestId || !teamId) {
@@ -16,43 +13,41 @@ exports.joinContest = async (req, res) => {
   }
 
   try {
-    const [contest, team] = await Promise.all([
-      Contest.findById(contestId),
-      getTeamDetails({ teamId, userId, matchId }) // Use destructured function
+    // 1. Fetch all necessary data at once for efficiency.
+    // We now populate the template to get the multi-entry limit.
+    const [contest, team, isMatchUpcoming] = await Promise.all([
+        Contest.findById(contestId).populate('contestTemplateId'),
+        Team.findOne({ _id: teamId, user: userId, matchId }),
+        Match.exists({ _id: matchId, dateTimeGMT: { $gt: new Date() } })
     ]);
-    console.log('DEBUG: Fetched data ->', { contest, team });
 
-    if (!contest) return res.status(404).json({ message: 'Contest not found' });
-    if (!team || team.user.toString() !== userId.toString() || team.matchId !== matchId){ // Ensure team object structure matches
-      return res.status(400).json({ message: 'Invalid team for the match or team not found' });
+    // 2. Perform all initial validations.
+    if (!isMatchUpcoming) {
+      return res.status(400).json({ message: 'This match has already started.' });
     }
-
+    if (!contest) return res.status(404).json({ message: 'Contest not found' });
+    if (!team) return res.status(400).json({ message: 'Invalid team for this match' });
     if (contest.filledSpots >= contest.totalSpots) {
-      console.log('----->>>>>');
       return res.status(400).json({ message: 'Contest is full' });
     }
 
-    const alreadyJoined = await ContestParticipation.exists({ user: userId, matchId, contestId });
-    if (alreadyJoined) {
-      console.log('++++++++')
-      return res.status(400).json({ message: 'Already joined this contest' });
+    // 3. Get the multi-entry limit from the contest's template. Default to 1 if not set.
+    const entryLimit = contest.contestTemplateId?.maxTeamsPerUser || 1;
+
+    // 4. Find all of the user's existing entries for this specific contest.
+    const existingParticipations = await ContestParticipation.find({ user: userId, contestId }).lean();
+
+    // 5. Apply the new multi-entry rules.
+    if (existingParticipations.length >= entryLimit) {
+      return res.status(400).json({ message: `You have reached the entry limit of ${entryLimit} for this contest.` });
     }
 
-    let userMatchExists = await getUserMatch({ userId, matchId }); // Use destructured function
-    console.log('check userMatchExists111111', userMatchExists);
-
-    if (!userMatchExists) {
-      const matchInfo = await getMatchById(matchId); // ✅ Now uses getMatchById from entityDataService
-      if (matchInfo) {
-        await createUserMatch({ // Use destructured function
-          user: userId,
-          matchId,
-          matchInfo,
-          status: matchInfo?.matchStarted ? (matchInfo?.matchEnded ? 'completed' : 'live') : 'upcoming'
-        });
-      }
+    const isTeamAlreadyEntered = existingParticipations.some(p => p.teamId.toString() === teamId);
+    if (isTeamAlreadyEntered) {
+      return res.status(400).json({ message: 'You have already joined this contest with this specific team.' });
     }
 
+    // 6. All checks passed. Proceed to join the contest.
     contest.participants.push(userId);
     contest.filledSpots += 1;
     await contest.save();
@@ -68,138 +63,80 @@ exports.joinContest = async (req, res) => {
 
   } catch (err) {
     console.error('Error in joinContest:', err);
-    return res.status(500).json({ message: 'Internal server error', error: err.message });
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };
 
-// ... (similar changes for joinMultipleContests and switchTeam if they use getMatchById)
-// In your provided code, joinMultipleContests and switchTeam also use getMatchById
-
 exports.joinMultipleContests = async (req, res) => {
-  const { matchId, contestId, teamId, count } = req.body;
+  const { matchId, teamId, count, contestTemplateId } = req.body;
   const userId = req.user._id;
 
-  // ... (input validation) ...
-  if (!matchId || !contestId || !teamId || !count || count < 1) {
-    return res.status(400).json({ message: 'Required: matchId, contestId, teamId, and valid count' });
+  if (!matchId || !teamId || !count || count < 1 || !contestTemplateId) {
+    return res.status(400).json({ message: 'Required: matchId, teamId, valid count, and contestTemplateId' });
   }
 
   try {
-    const [baseContest, team] = await Promise.all([
-      Contest.findById(contestId),
-      getTeamDetails({ teamId, userId, matchId })
-    ]);
-
-    // ... (validation for baseContest and team) ...
-    if (!baseContest) return res.status(404).json({ message: 'Base contest not found' });
-    if (!team || team.user.toString() !== userId.toString() || team.matchId !== matchId) {
-      return res.status(400).json({ message: 'Invalid team or team not found' });
+    // --- NEW, EFFICIENT VALIDATION STEP ---
+    // 1. First, check if the match is actually upcoming and available for joining.
+    const isMatchUpcoming = await Match.exists({ _id: matchId, dateTimeGMT: { $gt: new Date() } });
+    if (!isMatchUpcoming) {
+      return res.status(400).json({ message: "This match is not available for joining or has already started." });
     }
 
-
-    let userMatchExists = await getUserMatch({ userId, matchId });
-    console.log('check userMatchExists', userMatchExists);
-    if (!userMatchExists) {
-      const matchInfo = await getMatchById(matchId); // ✅ Now uses getMatchById from entityDataService
-      if (matchInfo) {
-        await createUserMatch({
-          user: userId,
-          matchId,
-          matchInfo,
-          status: matchInfo?.matchStarted ? (matchInfo?.matchEnded ? 'completed' : 'live') : 'upcoming'
-        });
-      }
-    }
-    // ... rest of the function
+    // 2. Second, validate the user's team for this match.
+    const team = await Team.findOne({ _id: teamId, user: userId, matchId });
+    if (!team) return res.status(400).json({ message: 'Invalid team for this match' });
+    
     let joinedCount = 0;
-    const participations = [];
-    // ... (while loop logic as before) ...
-     while (joinedCount < count) {
-      let targetContestIdToJoin;
-      if (joinedCount === 0) {
-        const existingParticipation = await ContestParticipation.exists({
-          user: userId, matchId, teamId, contestId: baseContest._id
-        });
-        if (existingParticipation && count === 1) { // only if they try to join the same thing once.
-             return res.status(400).json({ message: 'Already joined base contest with this team' });
-        } else if (existingParticipation) {
-            console.warn(`User ${userId} already joined base contest ${baseContest._id} with team ${teamId}. Will attempt to join clones/other contests.`);
-        }
-        targetContestIdToJoin = baseContest._id;
-      }
+    
+    // Find a base contest to use for cloning if we need to create new ones.
+    const baseContestForCloning = await Contest.findOne({ contestTemplateId, matchId });
+    if (!baseContestForCloning) {
+        return res.status(404).json({ message: 'No contests found for this template and match.'});
+    }
 
-      let targetContest;
-      if (targetContestIdToJoin && joinedCount === 0) {
-          const tempBaseContest = await Contest.findOne({
-              _id: baseContest._id,
-              filledSpots: { $lt: baseContest.totalSpots },
-          });
-          const alreadyInThisInstance = tempBaseContest && tempBaseContest.participants.includes(userId);
-          if (tempBaseContest && !alreadyInThisInstance) {
-            targetContest = tempBaseContest;
-          } else if (alreadyInThisInstance && joinedCount === 0) {
-             console.log(`User already in base contest ${baseContest._id}, will find/clone another.`);
-          }
-      }
+    // --- Core joining logic remains the same ---
+    while (joinedCount < count) {
+      const availableContest = await Contest.findOne({
+        contestTemplateId: contestTemplateId,
+        matchId: matchId,
+        filledSpots: { $lt: baseContestForCloning.totalSpots },
+        participants: { $ne: userId }
+      }).sort({ filledSpots: -1 });
+
+      let targetContest = availableContest;
 
       if (!targetContest) {
-        const availableContest = await Contest.findOne({
-          matchId: baseContest.matchId,
-          entryFee: baseContest.entryFee,
-          totalSpots: baseContest.totalSpots,
-          filledSpots: { $lt: baseContest.totalSpots },
-          participants: { $ne: userId }
-        }).sort({ filledSpots: -1 });
-
-        if (availableContest) {
-          targetContest = availableContest;
-        } else {
-          targetContest = await cloneContest(baseContest);
-        }
+        // If no available contest is found, clone a new one.
+        targetContest = await cloneContest(baseContestForCloning);
       }
-
-      if (targetContest.filledSpots >= targetContest.totalSpots) {
-        console.warn(`Contest ${targetContest._id} became full before user ${userId} could join.`);
-        const remainingAttempts = count - joinedCount;
-        if (remainingAttempts === (count - joinedCount)) { // if no successful joins yet and first attempt fails.
-             // Check if this was the original target and it's full
-            if (targetContest._id.equals(baseContest._id) && joinedCount === 0) {
-                console.log("Base contest is full, attempting to clone for multiple join.");
-                targetContest = await cloneContest(baseContest); // try cloning immediately
-                if (targetContest.filledSpots >= targetContest.totalSpots) { // if clone is also somehow full
-                    break; 
-                }
-            } else { // Some other contest became full
-                 break;
-            }
-        } else { // if some joins were successful but now hitting full ones
-            break;
-        }
-      }
-      if (targetContest.participants.includes(userId)) {
-          console.warn(`User ${userId} already in target contest ${targetContest._id}. Trying to clone a new one.`);
-          targetContest = await cloneContest(baseContest);
-          if (targetContest.participants.includes(userId) || targetContest.filledSpots >= targetContest.totalSpots) {
-              console.error("Failed to get a fresh contest for multiple join (already participant or full). Aborting this join attempt.");
-              continue;
-          }
+      
+      // Final check to ensure we don't double-join the same contest instance
+      const alreadyInThisInstance = await ContestParticipation.exists({ user: userId, contestId: targetContest._id });
+      if(alreadyInThisInstance) {
+        console.log(`User already in contest ${targetContest._id}. Skipping.`);
+        if(!availableContest) break; // Prevents infinite loop if only one full contest exists
+        continue;
       }
 
       targetContest.participants.push(userId);
       targetContest.filledSpots += 1;
       await targetContest.save();
 
-      const participation = await ContestParticipation.create({
-        user: userId, matchId, contestId: targetContest._id, teamId
+      await ContestParticipation.create({
+        user: userId,
+        matchId,
+        contestId: targetContest._id,
+        teamId
       });
-      participations.push(participation);
+
       joinedCount++;
     }
 
-    if (joinedCount === 0) {
-        return res.status(400).json({ message: 'Could not join any new contests. Base contest may be full or already joined with this team.' });
+    if (joinedCount < count) {
+      return res.status(200).json({ message: `Successfully joined ${joinedCount} contest(s). Some could not be joined as they filled up.` });
     }
-    return res.status(200).json({ message: `Successfully joined ${joinedCount} contest(s)`, participations });
+    return res.status(200).json({ message: `Successfully joined ${joinedCount} contest(s)` });
 
   } catch (err) {
     console.error('Error in joinMultipleContests:', err);
@@ -207,40 +144,58 @@ exports.joinMultipleContests = async (req, res) => {
   }
 };
 
+
 exports.switchTeam = async (req, res) => {
   const userId = req.user._id;
   const { participationId, newTeamId } = req.body;
 
-  // ... (input validation) ...
   if (!participationId || !newTeamId) {
     return res.status(400).json({ message: 'Required fields: participationId, newTeamId' });
   }
 
   try {
     const participation = await ContestParticipation.findOne({ _id: participationId, user: userId });
-    // ... (validation for participation and contest) ...
     if (!participation) return res.status(404).json({ message: 'Participation not found' });
-    const contest = await Contest.findById(participation.contestId);
-    if (!contest) return res.status(404).json({ message: 'Contest not found' });
 
-
-    const matchData = await getMatchById(participation.matchId); // ✅ Now uses getMatchById from entityDataService
-    if (matchData?.matchStarted) {
+    // --- REPLACED EXTERNAL CALL WITH LOCAL DB QUERY ---
+    // We check if the match still exists in our 'upcoming' matches collection.
+    const contestMatch = await Match.findById(participation.matchId, '_id').lean();
+    
+    // If it's not found in our upcoming collection, it means the match is live or completed.
+    if (!contestMatch) {
       return res.status(400).json({ message: 'Cannot switch team after match starts' });
     }
+    // --- END OF REPLACEMENT ---
 
-    const newTeam = await getTeamDetails({ teamId: newTeamId, userId, matchId: participation.matchId });
-     // ... (validation for newTeam) ...
-    if (!newTeam || newTeam.user !== userId || newTeam.matchId !== participation.matchId) {
-        return res.status(400).json({ message: 'Invalid new team or team not found for this user and match' });
-    }
+    const newTeam = await Team.findOne({ _id: newTeamId, user: userId, matchId: participation.matchId });
+    if (!newTeam) return res.status(400).json({ message: 'Invalid new team' });
 
     participation.teamId = newTeamId;
     await participation.save();
 
-    return res.json({ message: 'Team switched successfully', participation });
+    return res.json({ message: 'Team switched successfully' });
   } catch (err) {
     console.error('Error in switchTeam:', err);
-    return res.status(500).json({ message: 'Internal server error', error: err.message });
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+exports.getContestsByMatchId = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+
+    if (!matchId) {
+      return res.status(400).json({ message: 'A matchId is required.' });
+    }
+
+    const contests = await Contest.find({ matchId })
+      .select('title entryFee totalSpots filledSpots prize prizeBreakupType contestTemplateId')
+      .lean();
+
+    return res.status(200).json(contests);
+
+  } catch (error) {
+    console.error('Error fetching contests by match ID:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };

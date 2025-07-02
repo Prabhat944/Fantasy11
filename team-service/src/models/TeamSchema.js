@@ -22,6 +22,10 @@ const teamSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  teamName: { // ✅ Add this field
+    type: String,
+    required: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
