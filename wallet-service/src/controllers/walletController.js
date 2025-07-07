@@ -8,6 +8,7 @@ const CONTEST_SERVICE_URL = process.env.CONTEST_SERVICE_URL || 'http://localhost
 // const MATCH_SERVICE_URL = process.env.MATCH_SERVICE_URL || CONTEST_SERVICE_URL;
 const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://localhost:5001'; // Added for referral logic
 
+const OFFER_SERVICE_URL = process.env.OFFER_SERVICE_URL || 'http://localhost:3003';
 // Helper to round numbers to two decimal places consistently
 const roundToTwo = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
 
@@ -91,7 +92,50 @@ const getWalletDetails = async (req, res) => {
         res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 };
+const calculateDepositBonus = async (depositAmount) => {
+    try {
+        // Call the endpoint we designed for the Offer Service
+        const response = await axios.get(`${OFFER_SERVICE_URL}/api/offerRoutes/deposit-offer/active`);
+        const offer = response.data;
+        
+        if (!offer || !offer.tiers || offer.tiers.length === 0) {
+            return 0; // No active offer found
+        }
 
+        // Sort tiers from highest deposit to lowest to find the best matching offer
+        offer.tiers.sort((a, b) => b.minDeposit - a.minDeposit);
+        
+        let bonusPercentage = 0;
+        // Find the correct tier for the deposited amount
+        for (const tier of offer.tiers) {
+            if (depositAmount >= tier.minDeposit) {
+                bonusPercentage = tier.bonusPercentage;
+                break; // Stop at the first (highest) tier that matches
+            }
+        }
+
+        if (bonusPercentage > 0) {
+            let bonusAmount = (depositAmount * bonusPercentage) / 100;
+            // Apply the max bonus cap if the offer has one
+            if (offer.maxBonusAmount && bonusAmount > offer.maxBonusAmount) {
+                bonusAmount = offer.maxBonusAmount;
+            }
+            return roundToTwo(bonusAmount);
+        }
+
+        return 0; // The deposit amount didn't meet any of the offer tiers
+
+    } catch (error) {
+        // If the Offer Service is down or returns a 404 (No offer), we don't want to crash.
+        // We just log it and proceed without an offer bonus.
+        if (error.response?.status !== 404) {
+            console.error('Error fetching deposit offer:', error.message);
+        } else {
+            console.log('Info: No active deposit offer available.');
+        }
+        return 0;
+    }
+};
 const updateWalletAmount = async (userId, type, amount, res, deductionReason = '', signupBonusPercentage = 0, contestId = null, matchId = null) => {
     if (typeof amount !== 'number' || amount <= 0) {
         return res.status(400).json({ message: 'Invalid amount. Amount must be a positive number.' });
@@ -415,8 +459,76 @@ const getTransactionsHistory = async (req, res) => {
 };
 
 const depositFunds = async (req, res) => {
-    const amount = req.body.amount;
-    await updateWalletAmount(req.user._id.toString(), 'deposit', amount, res);
+    const userId = req.user._id.toString();
+    const { amount } = req.body;
+
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+        return res.status(400).json({ message: 'A valid positive amount is required.' });
+    }
+
+    try {
+        let wallet = await Wallet.findOne({ user: userId });
+        if (!wallet) {
+            wallet = new Wallet({ user: userId });
+        }
+
+        const gst = roundToTwo(amount * 0.28);
+        const netDeposit = roundToTwo(amount - gst);
+
+        // Update main balances
+        wallet.deposit_balance += netDeposit;
+        wallet.cashback_balance += gst;
+
+        // --- New Bonus Calculation Logic ---
+        let bonus = 0;
+        let bonusReason = "";
+
+        // 1. First, try to get a bonus from a special offer
+        const offerBonus = await calculateDepositBonus(amount);
+        
+        if (offerBonus > 0) {
+            bonus = offerBonus;
+            bonusReason = "Promotional offer bonus";
+        } 
+        // 2. If no offer bonus, fallback to the original first deposit bonus logic
+        else if (!wallet.isFirstDepositBonusGiven) {
+            bonus = amount; // Your original 100% first deposit bonus
+            wallet.isFirstDepositBonusGiven = true;
+            bonusReason = "First deposit bonus";
+        }
+        
+        if (bonus > 0) {
+            wallet.signup_bonus_balance += bonus;
+        }
+        // --- End of New Bonus Logic ---
+
+        await wallet.save();
+        await invalidateWalletCache(userId);
+
+        const finalReason = `Deposit ₹${amount}, GST ₹${gst}, Bonus ₹${bonus} (${bonusReason || 'No bonus'})`;
+        
+        // Create a detailed transaction record
+        await WalletTransaction.create({
+            user: userId,
+            type: 'deposit',
+            amount: amount,
+            reason: finalReason,
+            breakdown: {
+                deposit_balance: netDeposit,
+                cashback_balance: gst,
+                signup_bonus_balance: bonus
+            },
+        });
+        
+        res.status(200).json({ 
+            message: 'Deposit successful.', 
+            wallet: formatWallet(wallet) 
+        });
+
+    } catch (err) {
+        console.error(`Error during deposit for user ${userId}:`, err);
+        res.status(500).json({ message: 'Internal server error during deposit.' });
+    }
 };
 
 const addWinningAmount = async (req, res) => {
@@ -663,8 +775,72 @@ const creditUserForReferral = async (userId, amount, reason) => {
     }
   };
 
-// --- END: ADDED FOR REFERRAL BONUS LOGIC ---
+  const convertBonusToDeposit = async (req, res) => {
+    const { userId, amountToConvert, reason } = req.body;
 
+    if (!userId || !amountToConvert || amountToConvert <= 0) {
+        return res.status(400).json({ message: 'User ID and a positive amount to convert are required.' });
+    }
+
+    try {
+        const wallet = await Wallet.findOne({ user: userId });
+
+        if (!wallet) {
+            return res.status(404).json({ message: 'Wallet not found.' });
+        }
+        if (wallet.signup_bonus_balance < amountToConvert) {
+            return res.status(400).json({ message: 'Insufficient signup bonus balance to convert.' });
+        }
+
+        // The core conversion logic
+        wallet.signup_bonus_balance = roundToTwo(wallet.signup_bonus_balance - amountToConvert);
+        wallet.deposit_balance = roundToTwo(wallet.deposit_balance + amountToConvert);
+
+        await wallet.save();
+        await invalidateWalletCache(userId);
+
+        // Create a transaction record for this conversion
+        await WalletTransaction.create({
+            user: userId,
+            type: 'conversion', // A new type for clarity
+            amount: amountToConvert,
+            reason: reason || `Converted ₹${amountToConvert} from bonus to deposit.`,
+            breakdown: {
+                deposit_balance: amountToConvert, // Positive
+                signup_bonus_balance: -amountToConvert // Negative
+            }
+        });
+
+        res.status(200).json({
+            message: 'Bonus successfully converted to deposit balance.',
+            wallet: formatWallet(wallet)
+        });
+
+    } catch (err) {
+        console.error(`Error during bonus conversion for user ${userId}:`, err);
+        res.status(500).json({ message: 'Internal server error during conversion.' });
+    }
+};
+// --- END: ADDED FOR REFERRAL BONUS LOGIC ---
+const getWalletDetailsById = async (req, res) => {
+    const { userId } = req.params; // Get userId from the URL parameter
+
+    try {
+        let wallet = await Wallet.findOne({ user: userId });
+
+        if (!wallet) {
+            // It's better to return a 404 than create a wallet on a GET request
+            return res.status(404).json({ message: 'Wallet not found.' });
+        }
+
+        // Use your existing formatter to return the wallet details
+        res.status(200).json(formatWallet(wallet));
+
+    } catch (error) {
+        console.error(`Error fetching wallet for ${userId}:`, error);
+        res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+};
 
 module.exports = {
     getWalletDetails,
@@ -678,5 +854,7 @@ module.exports = {
     creditWinningAmountsForMatch,
     getTransactionsHistory,
     updateWithdrawalStatus,
-    addReferralBonus // Export the new function
+    addReferralBonus,
+    convertBonusToDeposit,
+    getWalletDetailsById
 };

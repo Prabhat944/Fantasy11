@@ -19,7 +19,9 @@ router.post('/refund', authMiddleware, walletController.refundFunds);
 
 router.post('/referral-bonus', walletController.addReferralBonus);
 
-router.get('/transactions', authMiddleware, walletController.getTransactionsHistory); // Protected route
+router.get('/transactions', authMiddleware, walletController.getTransactionsHistory);
+
+router.post('/wallet/convert-bonus', authMiddleware, walletController.convertBonusToDeposit);
 
 router.post('/withdrawals/:transactionId/status', adminAuthMiddleware, async (req, res) => {
     console.log('>>> Reached /api/wallet/withdrawals/:transactionId/status route <<<');
@@ -46,4 +48,6 @@ router.post('/withdrawals/:transactionId/status', adminAuthMiddleware, async (re
         res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 });
+
+router.get('/details/:userId', adminAuthMiddleware, walletController.getWalletDetailsById);
 module.exports = router;

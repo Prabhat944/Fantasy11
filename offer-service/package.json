@@ -1,0 +1,25 @@
+{
+    "name": "fantasy-offer-backend",
+    "version": "1.0.0",
+    "description": "Backend for fantasy cricket offer service",
+    "main": "index.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "nodemon server.js"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "axios": "^1.10.0",
+        "body-parser": "^1.20.2",
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.5",
+        "express": "^4.19.2",
+        "ioredis": "^5.4.1",
+        "jsonwebtoken": "^9.0.2",
+        "mongoose": "^8.4.4",
+        "mongoose-paginate-v2": "^1.9.1",
+        "nodemon": "^3.1.10"
+    }
+}
