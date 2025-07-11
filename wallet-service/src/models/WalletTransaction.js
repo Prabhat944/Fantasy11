@@ -11,7 +11,7 @@ const walletTransactionSchema = new mongoose.Schema({
     type: { // e.g., 'deposit', 'withdraw', 'deduct', 'winning', 'cashback', 'bonus', 'refund'
         type: String,
         required: true,
-        enum: ['deposit', 'withdraw', 'deduct', 'winning', 'cashback', 'bonus', 'refund', 'conversion']
+        enum: ['deposit', 'withdraw', 'deduct', 'winning', 'cashback', 'bonus', 'refund', 'conversion', 'tds']
     },
     amount: { // The total amount involved in this transaction (e.g., contest entry fee, withdrawal amount)
         type: Number,

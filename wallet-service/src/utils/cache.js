@@ -2,7 +2,7 @@
 const redisClient = require('../config/redis'); // Import the Redis client instance
 
 // Cache expiration time in seconds (e.g., 1 hour)
-const WALLET_CACHE_EXPIRY = 3600; // 1 hour
+const WALLET_CACHE_EXPIRY = 10; // 1 hour
 
 /**
  * Invalidates (deletes) a specific user's wallet data from the Redis cache.

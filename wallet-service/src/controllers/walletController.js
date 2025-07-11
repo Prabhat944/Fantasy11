@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Wallet = require('../models/Wallet');
 const WalletTransaction = require('../models/WalletTransaction');
 const axios = require('axios');
@@ -553,83 +554,249 @@ const addBonus = async (req, res) => {
 };
 
 const withdrawFunds = async (req, res) => {
-    const amount = req.body.amount;
-    await updateWalletAmount(req.user._id.toString(), 'withdraw', amount, res, '', 0);
-};
+    const userId = req.user._id.toString();
+    const { amount } = req.body;
 
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+        return res.status(400).json({ message: 'A valid positive amount is required.' });
+    }
+
+    const isTdsPromoActive = true;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const [wallet, userFinancials] = await Promise.all([
+            Wallet.findOne({ user: userId }).session(session),
+            getUserFinancialSummary(userId)
+        ]);
+        
+        console.log('--- Financial Summary For TDS ---', userFinancials);
+
+        if (!wallet) {
+            throw new Error('Wallet not found.');
+        }
+        if (wallet.withdrawal_balance < amount) {
+            return res.status(400).json({ message: 'Insufficient withdrawable balance.' });
+        }
+
+        const tdsDetails = calculateTDS(amount, userFinancials);
+        console.log('--- TDS Calculation Details ---', tdsDetails);
+
+        wallet.withdrawal_balance = roundToTwo(wallet.withdrawal_balance - amount);
+        
+        if (isTdsPromoActive && tdsDetails.tdsToDeduct > 0) {
+            wallet.cashback_balance = roundToTwo(wallet.cashback_balance + tdsDetails.tdsToDeduct);
+        }
+        
+        await wallet.save({ session });
+
+        await WalletTransaction.create([{
+            user: userId, type: 'withdraw', amount: amount,
+            reason: 'Withdrawal by user', withdrawalStatus: 'Completed',
+            breakdown: { withdrawal_balance: amount }
+        }], { session });
+
+        if (tdsDetails.tdsToDeduct > 0) {
+            await WalletTransaction.create([{
+                user: userId, type: 'tds', amount: tdsDetails.tdsToDeduct,
+                reason: `TDS (30%) on net winnings of ₹${tdsDetails.netWinnings}`
+            }], { session });
+
+            if (isTdsPromoActive) {
+                await WalletTransaction.create([{
+                    user: userId, 
+                    type: 'cashback', 
+                    // 👇 --- THIS LINE IS NOW CORRECTED ---
+                    amount: tdsDetails.tdsToDeduct, 
+                    reason: 'Promotional cashback against TDS deduction',
+                    breakdown: { cashback_balance: tdsDetails.tdsToDeduct }
+                }], { session });
+            }
+        }
+        
+        await session.commitTransaction();
+        await invalidateWalletCache(userId);
+
+        res.status(200).json({
+            message: 'Withdrawal successful.',
+            withdrawalAmount: amount,
+            tdsDeducted: tdsDetails.tdsToDeduct,
+            amountCreditedToBank: tdsDetails.finalAmountToUser,
+            promotionalCashback: isTdsPromoActive ? tdsDetails.tdsToDeduct : 0
+        });
+
+    } catch (error) {
+        await session.abortTransaction();
+        console.error('Error during withdrawal with TDS:', error);
+        res.status(500).json({ message: 'Internal server error during withdrawal.', error: error.message });
+    } finally {
+        session.endSession();
+    }
+};
 const deductFunds = async (req, res) => {
     const { amount, reason, signupBonusPercentage, contestId, matchId } = req.body;
     let effectiveReason = reason || `Deducted for contest join: Contest(${contestId || 'N/A'}) Match(${matchId || 'N/A'})`;
     await updateWalletAmount(req.user._id.toString(), 'deduct', amount, res, effectiveReason, signupBonusPercentage, contestId, matchId);
 };
 
-const refundFunds = async (req, res) => {
-    const targetUserId = req.body.userId || req.user._id.toString();
-    const { breakdown, reason = 'Generic Refund', refundedTransactionId = null, contestId = null, matchId = null } = req.body;
+// const refundFunds = async (req, res) => {
+//     const targetUserId = req.body.userId || req.user._id.toString();
+//     const { breakdown, reason = 'Generic Refund', refundedTransactionId = null, contestId = null, matchId = null } = req.body;
 
+//     if (!targetUserId) {
+//         return res.status(400).json({ message: 'User ID is required for refund.' });
+//     }
+//     if (!breakdown || typeof breakdown !== 'object') {
+//         return res.status(400).json({ message: 'Invalid or missing refund breakdown.' });
+//     }
+//     // A quick check for the presence of keys, can be more robust if needed
+//     if (!('deposit_balance' in breakdown && 'cashback_balance' in breakdown && 'withdrawal_balance' in breakdown && 'signup_bonus_balance' in breakdown)) {
+//         return res.status(400).json({ message: 'Refund breakdown is incomplete. Missing balance types.' });
+//     }
+
+//     try {
+//         if (refundedTransactionId) {
+//             const existingRefund = await WalletTransaction.findOne({ refundedTransactionId });
+//             if (existingRefund) {
+//                 return res.status(400).json({ message: 'Refund already processed for this transaction.' });
+//             }
+//         }
+
+//         let wallet = await Wallet.findOne({ user: targetUserId });
+//         if (!wallet) {
+//             wallet = new Wallet({ user: targetUserId });
+//             await wallet.save();
+//             console.warn(`Wallet not found for user: ${targetUserId} during refund. A new wallet was created.`);
+//         }
+
+//         // Update wallet balances
+//         wallet.deposit_balance = roundToTwo(wallet.deposit_balance + (breakdown.deposit_balance || 0));
+//         wallet.cashback_balance = roundToTwo(wallet.cashback_balance + (breakdown.cashback_balance || 0));
+//         wallet.withdrawal_balance = roundToTwo(wallet.withdrawal_balance + (breakdown.withdrawal_balance || 0));
+//         wallet.signup_bonus_balance = roundToTwo(wallet.signup_bonus_balance + (breakdown.signup_bonus_balance || 0));
+
+//         await wallet.save();
+//         await invalidateWalletCache(targetUserId);
+
+//         // Format the reason for the transaction log
+//         let refundReason = reason;
+//         if (contestId || matchId) {
+//             refundReason += ` (Contest:${contestId || 'N/A'} Match:${matchId || 'N/A'})`;
+//         }
+//         if (refundedTransactionId) {
+//             refundReason += ` [Ref ID: ${refundedTransactionId}]`;
+//         }
+
+//         // --- MODIFICATION START ---
+//         // Build the transaction data object first
+//         const transactionData = {
+//             user: targetUserId,
+//             type: 'refund',
+//             amount: roundToTwo(
+//                 (breakdown.deposit_balance || 0) +
+//                 (breakdown.cashback_balance || 0) +
+//                 (breakdown.withdrawal_balance || 0) +
+//                 (breakdown.signup_bonus_balance || 0)
+//             ),
+//             reason: refundReason,
+//             breakdown: breakdown,
+//             isRefunded: true,
+//         };
+
+//         // Conditionally add the refundedTransactionId only if it exists
+//         if (refundedTransactionId) {
+//             transactionData.refundedTransactionId = refundedTransactionId;
+//         }
+
+//         // Create the transaction using the prepared object
+//         await WalletTransaction.create(transactionData);
+//         // --- MODIFICATION END ---
+
+
+//         res.status(200).json({
+//             message: `Refund successful. Reason: ${refundReason}.`,
+//             wallet: formatWallet(wallet)
+//         });
+
+//     } catch (err) {
+//         console.error(`Error during refund for user ${targetUserId}:`, err);
+//         res.status(500).json({ message: 'Internal server error', error: err.message });
+//     }
+// };
+
+const refundFunds = async (req, res) => {
+    const targetUserId = req.body.userId || (req.user ? req.user._id.toString() : null);
+    const { breakdown, reason = 'Generic Refund', refundedTransactionId = null } = req.body;
+
+    // --- Step 0: Initial validation ---
     if (!targetUserId) {
         return res.status(400).json({ message: 'User ID is required for refund.' });
     }
-    if (!breakdown || typeof breakdown !== 'object') {
+    if (!breakdown || typeof breakdown !== 'object' || !('deposit_balance' in breakdown && 'cashback_balance' in breakdown && 'withdrawal_balance' in breakdown && 'signup_bonus_balance' in breakdown)) {
         return res.status(400).json({ message: 'Invalid or missing refund breakdown.' });
     }
-    if (!('deposit_balance' in breakdown && 'cashback_balance' in breakdown && 'withdrawal_balance' in breakdown && 'signup_bonus_balance' in breakdown)) {
-        return res.status(400).json({ message: 'Refund breakdown is incomplete. Missing balance types.' });
-    }
+    
+    console.log(`--- REFUND PROCESS STARTED for user ${targetUserId} ---`);
+    console.log('1. Received breakdown:', JSON.stringify(breakdown, null, 2));
 
     try {
         if (refundedTransactionId) {
             const existingRefund = await WalletTransaction.findOne({ refundedTransactionId });
             if (existingRefund) {
-                return res.status(400).json({ message: 'Refund already processed for this transaction.' });
+                console.log(`Skipping refund: Already processed for transaction ID ${refundedTransactionId}`);
+                return res.status(200).json({ message: 'Refund already processed for this transaction.' });
             }
         }
 
         let wallet = await Wallet.findOne({ user: targetUserId });
         if (!wallet) {
             wallet = new Wallet({ user: targetUserId });
-            await wallet.save();
-            console.warn(`Wallet not found for user: ${targetUserId} during refund. A new wallet was created.`);
+            console.warn(`Wallet not found for user ${targetUserId}. A new wallet was created.`);
         }
 
+        console.log('2. Wallet state BEFORE update:', JSON.stringify(wallet.toObject(), null, 2));
+
+        // Update wallet balances in memory
         wallet.deposit_balance = roundToTwo(wallet.deposit_balance + (breakdown.deposit_balance || 0));
         wallet.cashback_balance = roundToTwo(wallet.cashback_balance + (breakdown.cashback_balance || 0));
         wallet.withdrawal_balance = roundToTwo(wallet.withdrawal_balance + (breakdown.withdrawal_balance || 0));
         wallet.signup_bonus_balance = roundToTwo(wallet.signup_bonus_balance + (breakdown.signup_bonus_balance || 0));
 
-        await wallet.save();
+        console.log('3. Wallet state AFTER update (in memory):', JSON.stringify(wallet.toObject(), null, 2));
+        
+        // --- The critical save operation ---
+        const savedWallet = await wallet.save();
+        console.log('4. Wallet state AFTER save (returned from DB):', JSON.stringify(savedWallet.toObject(), null, 2));
+
         await invalidateWalletCache(targetUserId);
 
-        let refundReason = reason;
-        if (contestId || matchId) {
-            refundReason += ` (Contest:${contestId || 'N/A'} Match:${matchId || 'N/A'})`;
-        }
-        if (refundedTransactionId) {
-            refundReason += ` [Ref ID: ${refundedTransactionId}]`;
-        }
+        const totalRefundAmount = roundToTwo(
+            (breakdown.deposit_balance || 0) + (breakdown.cashback_balance || 0) +
+            (breakdown.withdrawal_balance || 0) + (breakdown.signup_bonus_balance || 0)
+        );
 
-        await WalletTransaction.create({
+        const transactionData = {
             user: targetUserId,
             type: 'refund',
-            amount: roundToTwo(
-                (breakdown.deposit_balance || 0) +
-                (breakdown.cashback_balance || 0) +
-                (breakdown.withdrawal_balance || 0) +
-                (breakdown.signup_bonus_balance || 0)
-            ),
-            reason: refundReason,
+            amount: totalRefundAmount,
+            reason: reason,
             breakdown: breakdown,
-            isRefunded: true,
-            refundedTransactionId: refundedTransactionId
-        });
+        };
+        if (refundedTransactionId) {
+            transactionData.refundedTransactionId = refundedTransactionId;
+        }
+
+        await WalletTransaction.create(transactionData);
+        console.log('5. Transaction record created successfully.');
+        console.log(`--- REFUND PROCESS ENDED for user ${targetUserId} ---`);
 
         res.status(200).json({
-            message: `Refund successful. Reason: ${refundReason}.`,
-            wallet: formatWallet(wallet)
+            message: `Refund successful.`,
+            wallet: formatWallet(savedWallet)
         });
-
     } catch (err) {
-        console.error(`Error during refund for user ${targetUserId}:`, err);
+        console.error(`❌ Error during refund for user ${targetUserId}:`, err);
         res.status(500).json({ message: 'Internal server error', error: err.message });
     }
 };
@@ -841,6 +1008,93 @@ const getWalletDetailsById = async (req, res) => {
         res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 };
+
+const getUserFinancialSummary = async (userId) => {
+    console.log(`\n--- Starting Financial Summary for User: ${userId} ---`);
+
+    // Determine the start of the current financial year (April 1st)
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const financialYearStart = new Date(now.getMonth() < 3 ? currentYear - 1 : currentYear, 3, 1);
+
+    console.log(`1. Financial Year Start Date being used: ${financialYearStart.toISOString()}`);
+
+    const matchQuery = {
+        user: new mongoose.Types.ObjectId(userId),
+        createdAt: { $gte: financialYearStart }
+    };
+
+    console.log('2. The exact query being sent to the database:', JSON.stringify(matchQuery, null, 2));
+    
+    const summary = await WalletTransaction.aggregate([
+        { $match: matchQuery },
+        {
+            $group: {
+                _id: "$user",
+                totalDepositsInFY: {
+                    $sum: { $cond: [{ $eq: ["$type", "deposit"] }, "$amount", 0] }
+                },
+                totalWithdrawalsInFY: {
+                    $sum: { $cond: [{ $and: [{ $eq: ["$type", "withdraw"] }, { $eq: ["$withdrawalStatus", "Completed"] }] }, "$amount", 0] }
+                },
+                tdsAlreadyPaidInFY: {
+                    $sum: { $cond: [{ $eq: ["$type", "tds"] }, "$amount", 0] }
+                }
+            }
+        }
+    ]);
+
+    console.log('3. Result returned from the database aggregation:', summary);
+
+    const openingBalanceOnApril1st = 0;
+
+    if (summary.length > 0) {
+        console.log('4. Final summary being returned:', { ...summary[0], openingBalanceOnApril1st });
+        console.log('--- Financial Summary Ended ---');
+        return { ...summary[0], openingBalanceOnApril1st };
+    }
+
+    const defaultSummary = {
+        totalDepositsInFY: 0,
+        totalWithdrawalsInFY: 0,
+        tdsAlreadyPaidInFY: 0,
+        openingBalanceOnApril1st: openingBalanceOnApril1st
+    };
+    
+    console.log('4. No transactions found. Returning default summary:', defaultSummary);
+    console.log('--- Financial Summary Ended ---');
+    return defaultSummary;
+};
+
+const calculateTDS = (currentWithdrawalAmount, userFinancials) => {
+    const {
+      totalDepositsInFY,
+      totalWithdrawalsInFY,
+      openingBalanceOnApril1st,
+      tdsAlreadyPaidInFY
+    } = userFinancials;
+  
+    const newTotalWithdrawals = totalWithdrawalsInFY + currentWithdrawalAmount;
+    const netWinnings = newTotalWithdrawals - totalDepositsInFY - openingBalanceOnApril1st;
+  
+    if (netWinnings <= 0) {
+      return { tdsToDeduct: 0, netWinnings, finalAmountToUser: currentWithdrawalAmount };
+    }
+  
+    const totalTdsDue = netWinnings * 0.30;
+    let tdsToDeductNow = totalTdsDue - tdsAlreadyPaidInFY;
+    
+    tdsToDeductNow = Math.max(0, tdsToDeductNow);
+    tdsToDeductNow = Math.min(currentWithdrawalAmount, tdsToDeductNow);
+  
+    const finalAmountToUser = currentWithdrawalAmount - tdsToDeductNow;
+  
+    return {
+      tdsToDeduct: roundToTwo(tdsToDeductNow),
+      netWinnings: roundToTwo(netWinnings),
+      finalAmountToUser: roundToTwo(finalAmountToUser),
+    };
+  };
 
 module.exports = {
     getWalletDetails,

@@ -1,0 +1,14 @@
+# Web framework
+fastapi
+uvicorn[standard]
+
+# ML and data handling
+scikit-learn
+pandas
+numpy
+
+# For making HTTP requests to other services
+httpx
+
+# For managing application settings
+pydantic-settings
