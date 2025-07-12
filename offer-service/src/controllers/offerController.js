@@ -8,34 +8,46 @@ const WALLET_SERVICE_URL = process.env.WALLET_SERVICE_URL ; // Replace with your
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN;
 // Called by the Contest Service every time a user joins a contest
 exports.trackOfferProgress = async (req, res) => {
-    const { userId, matchId } = req.body;
+    // 1. Get contestId from the request body now
+    const { userId, matchId, contestId } = req.body;
+    console.log(`--- Tracking offer progress for user: ${userId}, match: ${matchId}, contest: ${contestId} ---`);
 
     try {
-        const offer = await MatchOffer.findOne({ matchId: matchId, isActive: true });
+        const offer = await MatchOffer.findOne({ matchId: matchId, isActive: true }).lean();
         
-        // If there's no active offer for this match, do nothing.
         if (!offer) {
+            console.log(`Info: No active offer for this match. Stopping.`);
             return res.status(200).json({ message: 'No active offer for this match.' });
         }
 
-        // Find or create the user's progress tracker for this match
         let progress = await OfferProgress.findOne({ userId, matchId });
+        
         if (!progress) {
             progress = new OfferProgress({ userId, matchId });
+            console.log(`New progress tracker created for user ${userId} and match ${matchId}`);
         }
         
-        progress.contestsJoinedCount += 1;
+        // 2. Add the new contest ID to the array, only if it's not already there
+        if (!progress.joinedContests.includes(contestId)) {
+            progress.joinedContests.push(contestId);
+        }
 
-        // Check if the user has completed the offer
-        if (progress.contestsJoinedCount >= offer.requiredContests && progress.status === 'IN_PROGRESS') {
+        // 3. Set the count based on the array's length for accuracy
+        progress.contestsJoinedCount = progress.joinedContests.length;
+        console.log(`User ${userId} contest count for match ${matchId} is now: ${progress.contestsJoinedCount}`);
+
+        // Check for completion
+        if (progress.contestsJoinedCount >= offer.requiredContests && progress.status !== 'COMPLETED') {
             progress.status = 'COMPLETED';
+            console.log(`User ${userId} has COMPLETED the offer!`);
+            // Add logic here to trigger the bonus conversion
         }
         
         await progress.save();
-        res.status(200).json({ message: 'Progress tracked.' });
+        res.status(200).json({ message: 'Progress tracked successfully.', progress });
 
     } catch (error) {
-        console.error('Error tracking offer progress:', error);
+        console.error('❌ CRITICAL ERROR saving offer progress:', error);
         res.status(500).json({ message: 'Failed to track progress.' });
     }
 };

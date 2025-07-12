@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const offerProgressSchema = new mongoose.Schema({
     userId: { type: String, required: true, index: true },
     matchId: { type: String, required: true, index: true },
+    // 👇 --- ADD THIS NEW FIELD ---
+    joinedContests: [{ type: String }], // An array to store the IDs of joined contests
     contestsJoinedCount: { type: Number, default: 0 },
     status: {
         type: String,
