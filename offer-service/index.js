@@ -11,7 +11,7 @@ connectDB();
 app.use(express.json());
 app.use(cors());
 
-console.log('Setting up wallet routes...');
+console.log('Setting up Offer routes...');
 app.use('/api/offerRoutes', offerRoutes);
 
 app.get('/', (req, res) => {

@@ -8,7 +8,7 @@ const { nanoid } = require('nanoid');
  */
 exports.createLeague = async (req, res) => {
     const { name, description, maxMembers } = req.body;
-    const createdBy = req.user.id; // from auth middleware
+    const createdBy = req.user.userId; // Using userId from your JWT payload
 
     if (!name) {
         return res.status(400).json({ message: 'League name is required.' });
@@ -26,7 +26,12 @@ exports.createLeague = async (req, res) => {
 
         await newLeague.save();
 
-        res.status(201).json({ message: 'League created successfully!', league: newLeague });
+        res.status(201).json({ 
+            message: 'League created successfully!', 
+            league: newLeague,
+            roomId: newLeague._id.toString() // Add the new league's ID as roomId
+        });
+
     } catch (error) {
         console.error('Error creating league:', error);
         res.status(500).json({ message: 'Server error while creating league.' });
