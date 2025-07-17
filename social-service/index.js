@@ -4,7 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 require('dotenv').config();
-
+require('./src/cron/contestChatCleanupService'); // Import the chat cleanup service
 const connectDB = require('./src/config/db');
 const ChatMessage = require('./src/models/chatMessageModel'); // Import the ChatMessage model
 
@@ -12,7 +12,7 @@ const ChatMessage = require('./src/models/chatMessageModel'); // Import the Chat
 const chatRoutes = require('./src/routes/chatRoutes');
 const friendshipRoutes = require('./src/routes/friendshipRoutes');
 const leagueRoutes = require('./src/routes/leagueRoutes');
-
+const followRoutes = require('./src/routes/followRoutes');
 const app = express();
 connectDB();
 
@@ -29,6 +29,7 @@ app.use((req, res, next) => {
 app.use('/api/chat', chatRoutes); 
 app.use('/api/friends', friendshipRoutes);
 app.use('/api/leagues', leagueRoutes);
+app.use('/api/follow', followRoutes);
 
 app.get('/', (req, res) => {
     res.send('Social Service API is running...');

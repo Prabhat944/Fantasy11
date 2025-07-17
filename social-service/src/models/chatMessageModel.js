@@ -1,7 +1,14 @@
 const mongoose = require('mongoose');
+const Schema = mongoose.Schema;
 
 const chatMessageSchema = new mongoose.Schema({
   // Make both optional, but one must exist
+  chatRoomId: {
+    type: Schema.Types.ObjectId,
+    ref: 'ChatRoom',
+    required: true,
+    index: true,
+},
   leagueId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'League',
@@ -17,6 +24,11 @@ const chatMessageSchema = new mongoose.Schema({
     ref: 'User',
     required: true,
   },
+  messageType: {
+    type: String,
+    enum: ['text', 'team_share', 'predefined', 'contest_invite'], // You can add more later!
+    default: 'text',
+},
   content: {
     type: String,
     required: true,

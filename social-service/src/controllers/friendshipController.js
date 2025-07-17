@@ -1,11 +1,8 @@
 const Friendship = require('../models/friendshipModel');
 const UserService = require('../service/userServcie'); // Ensure this path is correct
+const Follow = require('../models/followModel');
 const mongoose = require('mongoose');
-/**
- * @desc    Search for users to add as friends
- * @route   GET /api/friends/search?search=...
- * @access  Private
- */
+
 exports.searchUsers = async (req, res) => {
     try {
         const searchTerm = req.query.search || '';
@@ -20,11 +17,6 @@ exports.searchUsers = async (req, res) => {
     }
 };
 
-/**
- * @desc    Send a friend request
- * @route   POST /api/friends/request
- * @access  Private
- */
 exports.sendFriendRequest = async (req, res) => {
     const { recipientId } = req.body;
     const requesterId = req.user.userId; // Use userId from JWT
@@ -50,11 +42,6 @@ exports.sendFriendRequest = async (req, res) => {
     }
 };
 
-/**
- * @desc    Respond to a friend request
- * @route   POST /api/friends/respond
- * @access  Private
- */
 exports.respondToRequest = async (req, res) => {
     const { requestId, status } = req.body;
     const recipientId = req.user.userId; // Use userId from JWT
@@ -78,11 +65,6 @@ exports.respondToRequest = async (req, res) => {
 };
 
 
-/**
- * @desc    Get a user's friends list
- * @route   GET /api/friends
- * @access  Private
- */
 exports.getFriendsList = async (req, res) => {
     try {
         const userId = req.user.userId; // Use userId from JWT
@@ -112,12 +94,6 @@ exports.getFriendsList = async (req, res) => {
     }
 };
 
-
-/**
- * @desc    Get pending friend requests
- * @route   GET /api/friends/pending
- * @access  Private
- */
 exports.getPendingRequests = async (req, res) => {
     try {
       const userId = req.user.userId;
@@ -155,4 +131,76 @@ exports.getPendingRequests = async (req, res) => {
       console.error(error);
       res.status(500).json({ message: 'Server error while fetching pending requests.' });
     }
-  };
+};
+
+exports.getUserFriendsList = async (req, res) => {
+    try {
+        const { userId } = req.params; // Get the user ID from the URL parameter
+        const token = req.headers.authorization?.split(' ')[1]; // Get the auth token
+
+        // Validate the provided user ID
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ message: 'Invalid user ID' });
+        }
+
+        // Find all accepted friendships where the user is either the requester or the recipient
+        const friendships = await Friendship.find({
+            $or: [{ requester: userId }, { recipient: userId }],
+            status: 'accepted',
+        });
+
+        // Create a list of all the friend IDs from the friendships
+        const friendIds = friendships.map(friendship => {
+            // If the requester is the user we are looking for, then the friend is the recipient. Otherwise, it's the requester.
+            return friendship.requester.toString() === userId ? friendship.recipient : friendship.requester;
+        });
+
+        // If the user has no friends, return an empty array
+        if (friendIds.length === 0) {
+            return res.json([]);
+        }
+
+        // Use the UserService to fetch the details for all friend IDs at once
+        const friendsDetails = await UserService.getUsersByIds(friendIds, token);
+
+        // Send the list of friend details in the response
+        res.json(friendsDetails);
+
+    } catch (error) {
+        console.error(error); // Log the error for debugging
+        res.status(500).json({ message: 'Server error while fetching the friends list.' });
+    }
+};
+
+exports.getConnectionCounts = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ message: 'Invalid user ID' });
+        }
+
+        // Use Promise.all to run all count queries concurrently for better performance
+        const [friendCount, followerCount, followingCount] = await Promise.all([
+            // 1. Count accepted friends
+            Friendship.countDocuments({
+                $or: [{ requester: userId }, { recipient: userId }],
+                status: 'accepted',
+            }),
+            // 2. Count followers (users following the given userId)
+            Follow.countDocuments({ following: userId }),
+            // 3. Count following (users the given userId is following)
+            Follow.countDocuments({ follower: userId })
+        ]);
+
+        res.json({
+            friends: friendCount,
+            followers: followerCount,
+            following: followingCount,
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error while fetching connection counts.' });
+    }
+};

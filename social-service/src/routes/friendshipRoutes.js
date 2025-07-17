@@ -5,7 +5,9 @@ const {
     sendFriendRequest,
     respondToRequest,
     getFriendsList,
-    getPendingRequests
+    getPendingRequests,
+    getUserFriendsList,
+    getConnectionCounts
 } = require('../controllers/friendshipController');
 
 // Import the real, secure authentication middleware
@@ -20,5 +22,7 @@ router.post('/request', sendFriendRequest);
 router.post('/respond', respondToRequest);
 router.get('/', getFriendsList);
 router.get('/pending', getPendingRequests);
+router.get('/user/:userId', getUserFriendsList);
+router.get('/counts/:userId', getConnectionCounts);
 
 module.exports = router;
