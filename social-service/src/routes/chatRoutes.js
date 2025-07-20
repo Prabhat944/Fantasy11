@@ -9,6 +9,7 @@ const { protect } = require('../middleware/authMiddleware');
 router.use(protect);
 
 // Route to get chat history for a league
+router.get('/predefined-messages', getPredefinedMessages);
 router.get('/:leagueId', getMessagesForLeague);
 router.get('/contest/:contestId', getMessagesForContest);
 router.post('/send', postMessage);
@@ -16,5 +17,5 @@ router.get('/friends/:friendId', getDirectMessageHistory);
 
 // Send a new message to a friend
 router.post('/friends', postDirectMessage);
-router.get('/predefined-messages', getPredefinedMessages);
+
 module.exports = router;
