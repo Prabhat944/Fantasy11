@@ -378,7 +378,7 @@ exports.postDirectMessage = async (req, res) => {
             }
         } else if (finalMessage.messageType === 'contest_invite') {
             // Assuming you have an internal endpoint on your Contest Service to get details
-            const contestDetails = await contestService.post('/api/v1/user/internal/by-ids', { contestIds: [finalMessage.content] });
+            const contestDetails = await contestService.post('/api/v1/contestController/internal/by-ids', { contestIds: [finalMessage.content] });
             if (contestDetails.data && contestDetails.data.length > 0) {
                 finalMessage.content = contestDetails.data[0];
             }

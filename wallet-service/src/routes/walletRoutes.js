@@ -3,25 +3,26 @@ const router = express.Router();
 const walletController = require('../controllers/walletController');
 const authMiddleware = require('../middleware/authMiddelware');
 const adminAuthMiddleware = require('../middleware/adminAuthMiddelware')
+const { generalLimiter, financialLimiter } = require('../middleware/rateLimiters');
 
-router.get('/', authMiddleware, walletController.getWalletDetails);
+router.get('/', authMiddleware, generalLimiter, walletController.getWalletDetails);
 
-router.post('/deposit', authMiddleware, walletController.depositFunds);
+router.post('/deposit', authMiddleware, financialLimiter, walletController.depositFunds);
 router.post('/win', authMiddleware, walletController.addWinningAmount);
 router.post('/cashback', authMiddleware, walletController.addGstTdsCashback);
 router.post('/bonus', authMiddleware, walletController.addBonus);
 
 router.post('/deduct', authMiddleware, walletController.deductFunds);
-router.post('/withdraw', authMiddleware, walletController.withdrawFunds);
+router.post('/withdraw', authMiddleware, financialLimiter, walletController.withdrawFunds);
 
 // NEW: Route for refunding funds
 router.post('/refund', authMiddleware, walletController.refundFunds);
 
 router.post('/referral-bonus', walletController.addReferralBonus);
 
-router.get('/transactions', authMiddleware, walletController.getTransactionsHistory);
+router.get('/transactions', authMiddleware, generalLimiter, walletController.getTransactionsHistory);
 
-router.post('/wallet/convert-bonus', authMiddleware, walletController.convertBonusToDeposit);
+router.post('/wallet/convert-bonus', authMiddleware, financialLimiter, walletController.convertBonusToDeposit);
 
 router.post('/withdrawals/:transactionId/status', adminAuthMiddleware, async (req, res) => {
     console.log('>>> Reached /api/wallet/withdrawals/:transactionId/status route <<<');

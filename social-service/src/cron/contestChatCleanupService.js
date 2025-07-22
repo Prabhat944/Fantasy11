@@ -62,7 +62,7 @@
 //     try {
 //         // 1. Get completed contest IDs from Contest Service (This part is unchanged)
 //         console.log('Fetching completed contests...');
-//         const response = await contestService.get('/contests/internal/for-chat-cleanup');
+//         const response = await contestService.get('/api/v1/contestController/internal/for-chat-cleanup');
 //         const contests = response.data;
 
 //         if (!contests || contests.length === 0) {
@@ -97,7 +97,7 @@
 
 //         // 4. Notify the Contest Service that the cleanup is done (This part is unchanged)
 //         console.log('Marking contests as chat-deleted in Contest Service...');
-//         await contestService.patch('/contests/internal/mark-chat-deleted', {
+//         await contestService.patch('/api/v1/contestController/internal/mark-chat-deleted', {
 //             contestIds: completedContestIds
 //         });
 
